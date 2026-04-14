@@ -52,11 +52,20 @@ git push -u origin main
 4. Click **Connect to Project** → select your project
 5. Vercel auto-adds `KV_REST_API_URL` and `KV_REST_API_TOKEN` env vars ✓
 
-### Step 4 — Set your webhook secret
+### Step 4 — Set your secret environment variables
 1. In Vercel project → **Settings → Environment Variables**
-2. Add: `WEBHOOK_SECRET` = any random string you make up
-   (example: `tim-run-secret-abc123`)
-3. Click **Save** → then **Redeploy** the project
+2. Add these three variables:
+
+| Variable | Example value | Purpose |
+|---|---|---|
+| `WEBHOOK_SECRET` | `tim-write-abc123` | Protects the Health Auto Export POST endpoint |
+| `READ_SECRET` | `tim-read-xyz789` | Protects the GET endpoint your app calls |
+| `VITE_READ_SECRET` | same as READ_SECRET | Bakes the read secret into the PWA at build time |
+
+3. Click **Save** on each → then click **Redeploy** the project
+
+> Use different values for WEBHOOK_SECRET and READ_SECRET.
+> VITE_READ_SECRET must be identical to READ_SECRET.
 
 ---
 

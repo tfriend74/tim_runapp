@@ -134,7 +134,11 @@ export default function App() {
     setUpdating(true);
     setUpdateMsg("");
     try {
-      const res  = await fetch("/api/dashboard-data");
+      // READ_SECRET is baked in at build time via Vite's env system.
+      // Set VITE_READ_SECRET in Vercel environment variables to match READ_SECRET.
+      const res  = await fetch("/api/dashboard-data", {
+        headers: { "x-read-secret": import.meta.env.VITE_READ_SECRET || "" }
+      });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to fetch data");
