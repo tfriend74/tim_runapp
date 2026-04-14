@@ -1,31 +1,31 @@
 // api/dashboard-data.js
-// ─────────────────────────────────────────────────────────────────────────────
-// GET endpoint called by the PWA when the user taps "Update".
-// Returns the latest dashboard data from Vercel KV.
-// Falls back gracefully if no data has been pushed yet.
-// ─────────────────────────────────────────────────────────────────────────────
+// GET endpoint called by the PWA Update button — reads from Upstash Redis.
 
-import { kv } from "@vercel/kv";
+import { Redis } from "@upstash/redis";
+
+const redis = Redis.fromEnv();
 
 export default async function handler(req, res) {
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Allow the PWA (same domain) to call this
-  res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "no-store");
 
   try {
-    const data = await kv.get("dashboard");
+    const raw  = await redis.get("dashboard");
 
-    if (!data) {
+    if (!raw) {
       return res.status(404).json({
-        error: "No data yet. Open Health Auto Export on your iPhone and trigger a sync."
+        error: "No data yet — open Health Auto Export on your iPhone and tap Export Now."
       });
     }
 
+    // Upstash auto-parses JSON, but handle both string and object just in case
+    const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+
     return res.status(200).json(data);
+
   } catch (err) {
     console.error("Dashboard data fetch error:", err);
     return res.status(500).json({ error: err.message });
