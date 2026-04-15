@@ -31,34 +31,46 @@ export default async function handler(req, res) {
     let heartRateData  = [];
     let restingHRData  = [];
 
-    if (raw?.data && !Array.isArray(raw.data)) {
-      // Shape A — keyed object
-      const d = raw.data;
-      workoutData   = d.workouts        || d.Workouts        || [];
-      heartRateData = d.heartRate       || d.HeartRate       || d.heart_rate || [];
-      restingHRData = d.restingHeartRate|| d.RestingHeartRate|| d.resting_heart_rate || [];
-    } else {
-      // Shape B or C — array of metric objects
-      const metrics = Array.isArray(raw) ? raw : (raw.metrics || raw.data || []);
-      const find    = (name) => metrics.find?.((m) =>
-        m.name?.toLowerCase().includes(name.toLowerCase())
-      );
-      workoutData   = find("workout")?.data       || [];
-      heartRateData = find("heart rate")?.data    || [];
-      restingHRData = find("resting heart")?.data || [];
-    }
+    // Health Auto Export sends { Data: [ { name: "Workouts", data: [...] }, ... ] }
+    // Normalize to array of metric objects regardless of casing
+    const topLevel = raw?.Data || raw?.data || raw?.metrics || raw;
+    const metrics  = Array.isArray(topLevel) ? topLevel : Object.values(topLevel || {});
+
+    const find = (name) => metrics.find?.((m) =>
+      (m.name || m.Name || "").toLowerCase().includes(name.toLowerCase())
+    );
+
+    const workoutsMetric  = find("workout");
+    const heartRateMetric = find("heart rate");
+    const restingHRMetric = find("resting heart");
+
+    workoutData   = workoutsMetric?.data  || workoutsMetric?.Data  || [];
+    heartRateData = heartRateMetric?.data || heartRateMetric?.Data || [];
+    restingHRData = restingHRMetric?.data || restingHRMetric?.Data || [];
 
     // ── Runs ──────────────────────────────────────────────────────────────────
+    // Log first workout to debug field names
+    const sampleWorkout = workoutData[0] || null;
+
     const runs = workoutData
       .filter((w) => {
-        const type = (w.workoutActivityType || w.type || w.activityType || "").toLowerCase();
-        return type.includes("running") || type.includes("run");
+        // Check every possible field name Health Auto Export v2 might use
+        const typeFields = [
+          w.workoutActivityType, w.activityType, w.type,
+          w.name, w.workoutType, w.activity
+        ].map(v => (v || "").toLowerCase());
+        return typeFields.some(t => t.includes("run"));
       })
       .map((w) => ({
-        date:     w.startDate || w.date || w.start,
-        distance: Math.round((parseFloat(w.totalDistance || w.distance || 0)) * 1000), // km→m
+        date:     w.startDate || w.date || w.start || w.dateComponents,
+        // v2 sends distance in km, multiply by 1000 for meters
+        distance: Math.round((parseFloat(
+          w.totalDistance ?? w.distance ?? w.distanceWalkingRunning ?? 0
+        )) * 1000),
         duration: Math.round(parseFloat(w.duration || w.totalDuration || 0)),
-        calories: Math.round(parseFloat(w.totalEnergyBurned || w.calories || w.energy || 0)),
+        calories: Math.round(parseFloat(
+          w.totalEnergyBurned ?? w.activeEnergyBurned ?? w.calories ?? w.energy ?? 0
+        )),
       }))
       .filter((r) => r.date && r.distance > 0)
       .sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -180,7 +192,14 @@ export default async function handler(req, res) {
 
     await redis.set("dashboard", JSON.stringify(dashboardData));
 
-    return res.status(200).json({ ok:true, runs:runs.length, ytdMiles, rawKeys:Object.keys(raw) });
+    return res.status(200).json({ 
+      ok: true, 
+      runs: runs.length, 
+      ytdMiles,
+      workoutCount: workoutData.length,
+      sampleWorkout,
+      metrics: metrics.map(m => m.name || m.Name),
+    });
 
   } catch (err) {
     console.error("Webhook error:", err);
