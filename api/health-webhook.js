@@ -143,9 +143,12 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, type: "workouts", runs: runs.length, ytdMiles });
     }
 
-    // ── HEALTH METRICS format: { data: [ { name, data: [...] } ] } ────────────
-    if (Array.isArray(raw?.data)) {
-      const metrics = raw.data;
+    // ── HEALTH METRICS format: { metrics: [...] } or { data: [...] } ──────────
+    const metricsArray = Array.isArray(raw?.metrics) ? raw.metrics
+                       : Array.isArray(raw?.data)    ? raw.data
+                       : null;
+    if (metricsArray) {
+      const metrics = metricsArray;
       const find    = name => metrics.find(m => (m.name || "").toLowerCase().includes(name.toLowerCase()));
 
       const hrMetric   = find("heart rate");
