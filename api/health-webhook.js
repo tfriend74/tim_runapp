@@ -143,9 +143,10 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, type: "workouts", runs: runs.length, ytdMiles });
     }
 
-    // ── HEALTH METRICS format: { metrics: [...] } or { data: [...] } ──────────
-    const metricsArray = Array.isArray(raw?.metrics) ? raw.metrics
-                       : Array.isArray(raw?.data)    ? raw.data
+    // ── HEALTH METRICS format: { data: { metrics: [...] } } ─────────────────
+    const metricsArray = Array.isArray(raw?.data?.metrics) ? raw.data.metrics
+                       : Array.isArray(raw?.metrics)       ? raw.metrics
+                       : Array.isArray(raw?.data)          ? raw.data
                        : null;
     if (metricsArray) {
       const metrics = metricsArray;
@@ -221,4 +222,3 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message });
   }
 }
-
