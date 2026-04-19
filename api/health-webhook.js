@@ -150,10 +150,17 @@ export default async function handler(req, res) {
                        : null;
     if (metricsArray) {
       const metrics = metricsArray;
-      const find    = name => metrics.find(m => (m.name || "").toLowerCase().includes(name.toLowerCase()));
+      // Match both "heart rate" and "heart_rate" style names
+      const find = (name) => metrics.find(m => {
+        const n = (m.name || "").toLowerCase().replace(/_/g, " ");
+        return n.includes(name.toLowerCase());
+      });
 
       const hrMetric   = find("heart rate");
       const restMetric = find("resting heart");
+
+      // Debug: log all metric names
+      console.log("Metric names:", metrics.map(m => m.name).join(", "));
 
       const hrData   = hrMetric?.data   || [];
       const restData = restMetric?.data || [];
@@ -211,7 +218,7 @@ export default async function handler(req, res) {
         hrSummary, hrMonthly, hrDaily, last7Days,
       };
       await redis.set("dashboard", JSON.stringify(merged));
-      return res.status(200).json({ ok: true, type: "metrics", hrPoints: hrVals.length });
+      return res.status(200).json({ ok: true, type: "metrics", hrPoints: hrVals.length, restPoints: restVals.length, metricNames: metrics.map(m => m.name) });
     }
 
     // Unknown format
