@@ -86,17 +86,22 @@ export default async function handler(req, res) {
 
       const last7Days = [];
       for (let i = 6; i >= 0; i--) {
-        const d   = new Date();
+        const d = new Date();
         d.setDate(d.getDate() - i);
-        const key   = d.toISOString().slice(0, 10);
+        // Use local date parts to avoid UTC timezone shift
+        const year  = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, "0");
+        const day   = String(d.getDate()).padStart(2, "0");
+        const key   = `${year}-${month}-${day}`;
         const label = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
         const run   = runDateMap[key];
-        // Preserve existing HR data if we have it
         const existDay = (existing.last7Days || []).find(x => x.date === label);
+        // Use workout avgHR if available — much more accurate than raw metric samples
+        const workoutHR = run?.avgHR > 40 ? run.avgHR : null;
         last7Days.push({
           date:   label,
           miles:  run ? parseFloat((run.distance / 1609.34).toFixed(2)) : 0,
-          hr:     existDay?.hr || null,
+          hr:     workoutHR || existDay?.hr || null,
           hasRun: !!run,
         });
       }
@@ -134,13 +139,52 @@ export default async function handler(req, res) {
         .filter(m => monthMap[m])
         .map(m => ({ month: m, miles: parseFloat(monthMap[m].miles.toFixed(2)), runs: monthMap[m].runs }));
 
+      // Calculate accurate HR stats from workout data
+      const runHRs    = runs.filter(r => r.avgHR > 40).map(r => r.avgHR);
+      const runMaxHRs = runs.filter(r => r.maxHR > 40).map(r => r.maxHR);
+      const avgRunHR  = runHRs.length    ? Math.round(runHRs.reduce((a,b)=>a+b,0)/runHRs.length) : null;
+      const peakHR    = runMaxHRs.length ? Math.round(Math.max(...runMaxHRs)) : null;
+
+      // Build monthly avg HR from workouts
+      const wktMonthHR = {};
+      runs2026.filter(r => r.avgHR > 40).forEach(r => {
+        const m = new Date(r.date).toLocaleDateString("en-US", { month: "short" });
+        if (!wktMonthHR[m]) wktMonthHR[m] = [];
+        wktMonthHR[m].push(r.avgHR);
+      });
+
+      // Merge workout monthly HR into existing hrMonthly
+      const existingHrMonthly = existing.hrMonthly || [];
+      const hrMonthlyFromWorkouts = existingHrMonthly.map(m => ({
+        ...m,
+        avg: wktMonthHR[m.month]
+          ? Math.round(wktMonthHR[m.month].reduce((a,b)=>a+b,0)/wktMonthHR[m.month].length)
+          : m.avg,
+      }));
+      // Add any new months not yet in hrMonthly
+      Object.entries(wktMonthHR).forEach(([month, hrs]) => {
+        if (!hrMonthlyFromWorkouts.find(m => m.month === month)) {
+          hrMonthlyFromWorkouts.push({ month, avg: Math.round(hrs.reduce((a,b)=>a+b,0)/hrs.length), resting: null });
+        }
+      });
+
+      // Merge hrSummary — preserve resting values from metrics, update peak/avg from workouts
+      const hrSummary = {
+        ...(existing.hrSummary || {}),
+        avgRunHR,
+        peakHR,
+        avgHR: avgRunHR || existing.hrSummary?.avgHR,
+      };
+
       const merged = {
         ...existing,
         lastUpdated: new Date().toISOString(),
         ytdMiles, recentRuns, last7Days, speedData, monthlyData, prs,
+        hrSummary,
+        hrMonthly: hrMonthlyFromWorkouts.length ? hrMonthlyFromWorkouts : existing.hrMonthly,
       };
       await redis.set("dashboard", JSON.stringify(merged));
-      return res.status(200).json({ ok: true, type: "workouts", runs: runs.length, ytdMiles });
+      return res.status(200).json({ ok: true, type: "workouts", runs: runs.length, ytdMiles, peakHR, avgRunHR });
     }
 
     // ── HEALTH METRICS format: { data: { metrics: [...] } } ─────────────────
@@ -169,11 +213,16 @@ export default async function handler(req, res) {
       const hrVals   = hrData.map(h => parseFloat(h.qty || 0)).filter(v => v >= 40 && v <= 220);
       const restVals = restData.map(h => parseFloat(h.qty || 0)).filter(v => v >= 40 && v <= 120);
 
+      // Use resting HR metric for resting values (accurate)
+      // Use existing workout peak/avg HR for activity values (far more accurate than raw samples)
+      const existingPeak    = existing.hrSummary?.peakHR    || null;
+      const existingAvgRun  = existing.hrSummary?.avgRunHR  || null;
+
       const hrSummary = {
-        avgHR:         hrVals.length   ? Math.round(hrVals.reduce((a, b) => a + b) / hrVals.length)   : existing.hrSummary?.avgHR,
-        avgResting:    restVals.length ? Math.round(restVals.reduce((a, b) => a + b) / restVals.length): existing.hrSummary?.avgResting,
-        lowestResting: restVals.length ? Math.round(Math.min(...restVals))                             : existing.hrSummary?.lowestResting,
-        peakHR:        hrVals.length   ? Math.round(Math.max(...hrVals))                               : existing.hrSummary?.peakHR,
+        avgHR:         hrVals.length   ? Math.round(hrVals.reduce((a, b) => a + b) / hrVals.length)    : existing.hrSummary?.avgHR,
+        avgResting:    restVals.length ? Math.round(restVals.reduce((a, b) => a + b) / restVals.length) : existing.hrSummary?.avgResting,
+        lowestResting: restVals.length ? Math.round(Math.min(...restVals))                              : existing.hrSummary?.lowestResting,
+        peakHR:        existingPeak,  // preserved from workout data, not raw HR metric
       };
 
       // Daily HR lookup for last7Days merge
@@ -207,11 +256,18 @@ export default async function handler(req, res) {
         const v = parseFloat(h.qty || 0);
         if (m && v >= 40 && v <= 120) { if (!hrMonthMap[m]) hrMonthMap[m] = { avg: [], rest: [] }; hrMonthMap[m].rest.push(v); }
       });
-      const hrMonthly = Object.entries(hrMonthMap).sort().map(([k, v]) => ({
-        month:   new Date(k + "-01").toLocaleDateString("en-US", { month: "short" }),
-        avg:     v.avg.length   ? Math.round(v.avg.reduce((a, b) => a + b) / v.avg.length)   : null,
-        resting: v.rest.length  ? Math.round(v.rest.reduce((a, b) => a + b) / v.rest.length)  : null,
-      }));
+      // For monthly chart: use resting HR from metrics (accurate),
+      // merge avg HR from existing workout data if available
+      const existingMonthly = existing.hrMonthly || [];
+      const hrMonthly = Object.entries(hrMonthMap).sort().map(([k, v]) => {
+        const month = new Date(k + "-01").toLocaleDateString("en-US", { month: "short" });
+        const existMonth = existingMonthly.find(m => m.month === month);
+        return {
+          month,
+          avg:     existMonth?.avg || (v.avg.length ? Math.round(v.avg.reduce((a,b)=>a+b)/v.avg.length) : null),
+          resting: v.rest.length ? Math.round(v.rest.reduce((a, b) => a + b) / v.rest.length) : null,
+        };
+      });
 
       // Only include physiologically valid HR readings for the chart
       const hrDaily = hrData
