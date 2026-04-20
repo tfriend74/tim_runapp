@@ -438,10 +438,10 @@ export default function App() {
 
           {/* Monthly resting vs running HR */}
           <Card>
-            <SectionLabel>Monthly HR — Resting vs Running</SectionLabel>
+            <SectionLabel>Weekly HR — Resting vs Running</SectionLabel>
             <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>
               <span style={{ color: "#ef4444" }}>■</span> Avg Run HR &nbsp;·&nbsp;
-              <span style={{ color: "#f97316" }}>■</span> Resting HR
+              <span style={{ color: "#f97316" }}>■</span> Resting HR &nbsp;·&nbsp; weekly averages
             </div>
             <ResponsiveContainer width="100%" height={180}>
               <LineChart data={hrMonthly}>
