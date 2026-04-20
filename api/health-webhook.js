@@ -165,8 +165,9 @@ export default async function handler(req, res) {
       const hrData   = hrMetric?.data   || [];
       const restData = restMetric?.data || [];
 
-      const hrVals   = hrData.map(h => parseFloat(h.qty || 0)).filter(Boolean);
-      const restVals = restData.map(h => parseFloat(h.qty || 0)).filter(Boolean);
+      // Filter out physiologically impossible values (HR must be 40-220)
+      const hrVals   = hrData.map(h => parseFloat(h.qty || 0)).filter(v => v >= 40 && v <= 220);
+      const restVals = restData.map(h => parseFloat(h.qty || 0)).filter(v => v >= 40 && v <= 120);
 
       const hrSummary = {
         avgHR:         hrVals.length   ? Math.round(hrVals.reduce((a, b) => a + b) / hrVals.length)   : existing.hrSummary?.avgHR,
@@ -176,10 +177,15 @@ export default async function handler(req, res) {
       };
 
       // Daily HR lookup for last7Days merge
+      // Build daily HR map using only valid readings (>=40 bpm)
       const hrByDay = {};
       hrData.forEach(h => {
+        const val = parseFloat(h.qty || 0);
+        if (val < 40) return; // skip impossible values
         const day = (h.date || "").slice(0, 10);
-        if (day && h.qty) hrByDay[day] = Math.round(parseFloat(h.qty));
+        if (!day) return;
+        // Keep the highest valid reading per day (most likely a real active reading)
+        if (!hrByDay[day] || val > hrByDay[day]) hrByDay[day] = Math.round(val);
       });
 
       const last7Days = (existing.last7Days || []).map(d => {
@@ -194,12 +200,12 @@ export default async function handler(req, res) {
       hrData.forEach(h => {
         const m = (h.date || "").slice(0, 7);
         const v = parseFloat(h.qty || 0);
-        if (m && v) { if (!hrMonthMap[m]) hrMonthMap[m] = { avg: [], rest: [] }; hrMonthMap[m].avg.push(v); }
+        if (m && v >= 40 && v <= 220) { if (!hrMonthMap[m]) hrMonthMap[m] = { avg: [], rest: [] }; hrMonthMap[m].avg.push(v); }
       });
       restData.forEach(h => {
         const m = (h.date || "").slice(0, 7);
         const v = parseFloat(h.qty || 0);
-        if (m && v) { if (!hrMonthMap[m]) hrMonthMap[m] = { avg: [], rest: [] }; hrMonthMap[m].rest.push(v); }
+        if (m && v >= 40 && v <= 120) { if (!hrMonthMap[m]) hrMonthMap[m] = { avg: [], rest: [] }; hrMonthMap[m].rest.push(v); }
       });
       const hrMonthly = Object.entries(hrMonthMap).sort().map(([k, v]) => ({
         month:   new Date(k + "-01").toLocaleDateString("en-US", { month: "short" }),
@@ -207,10 +213,14 @@ export default async function handler(req, res) {
         resting: v.rest.length  ? Math.round(v.rest.reduce((a, b) => a + b) / v.rest.length)  : null,
       }));
 
-      const hrDaily = hrData.slice(-30).map(h => ({
-        date: new Date(h.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-        hr:   Math.round(parseFloat(h.qty || 0)),
-      }));
+      // Only include physiologically valid HR readings for the chart
+      const hrDaily = hrData
+        .filter(h => parseFloat(h.qty || 0) >= 40)
+        .slice(-30)
+        .map(h => ({
+          date: new Date(h.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+          hr:   Math.round(parseFloat(h.qty || 0)),
+        }));
 
       const merged = {
         ...existing,
