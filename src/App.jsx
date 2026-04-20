@@ -101,6 +101,7 @@ export default function App() {
   const [hrMonthly,   setHrMonthly]   = useState(STATIC_HR_MONTHLY);
   const [hrSummary,   setHrSummary]   = useState({ avgHR: null, avgResting: 70, lowestResting: 68, peakHR: null });
   const [restingDaily, setRestingDaily] = useState([]);
+  const [runHrDaily,    setRunHrDaily]    = useState([]);
 
   // PWA install
   const [deferredPrompt, setDeferredPrompt] = useState(null);
@@ -136,7 +137,7 @@ export default function App() {
       if (data.hrSummary)                 setHrSummary(data.hrSummary);
       if (data.lastUpdated)               setLastUpdated(fmtTimestamp(data.lastUpdated));
 
-      // Build clean resting HR daily from hrDaily (filter to one per day, valid values only)
+      // Clean resting HR — one per day, valid values only
       if (data.hrDaily?.length) {
         const seen = new Set();
         const clean = data.hrDaily
@@ -144,6 +145,15 @@ export default function App() {
           .filter(h => { if (seen.has(h.date)) return false; seen.add(h.date); return true; })
           .slice(-30);
         setRestingDaily(clean);
+      }
+
+      // Build run HR daily from workout avgHR — one point per run day
+      if (data.recentRuns?.length) {
+        const runHr = data.recentRuns
+          .filter(r => r.avgHR > 40)
+          .map(r => ({ date: r.dateLabel || r.date, hr: r.avgHR }))
+          .reverse(); // chronological order
+        setRunHrDaily(runHr);
       }
 
       setIsLive(true);
@@ -380,13 +390,13 @@ export default function App() {
             </Card>
           </div>
 
-          {/* Resting HR trend — one clean reading per day */}
+          {/* Resting HR trend */}
           <Card style={{ marginBottom: 14 }}>
             <SectionLabel>Resting Heart Rate Trend</SectionLabel>
             <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>
-              Daily resting HR from Apple Watch · lower is better
+              Daily resting HR · Apple Watch · lower is better
             </div>
-            <ResponsiveContainer width="100%" height={200}>
+            <ResponsiveContainer width="100%" height={180}>
               <LineChart data={restingDaily}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#252525" />
                 <XAxis dataKey="date" tick={{ fill: "#999", fontSize: 9 }} axisLine={false} tickLine={false} />
@@ -394,7 +404,7 @@ export default function App() {
                 <Tooltip content={<TT formatter={v => Math.round(v) + " bpm"} />} />
                 {hrSummary.avgResting && (
                   <ReferenceLine y={hrSummary.avgResting} stroke="#f97316" strokeDasharray="4 4"
-                    label={{ value: "avg", position: "insideTopRight", fill: "#f97316", fontSize: 9 }} />
+                    label={{ value: "avg " + hrSummary.avgResting, position: "insideTopRight", fill: "#f97316", fontSize: 9 }} />
                 )}
                 <Line type="monotone" dataKey="hr" stroke="#f97316" strokeWidth={2}
                   dot={{ fill: "#f97316", r: 3, strokeWidth: 0 }} activeDot={{ r: 5, fill: "#fff" }} />
@@ -402,23 +412,50 @@ export default function App() {
             </ResponsiveContainer>
           </Card>
 
-          {/* Monthly resting HR */}
-          {hrMonthly.filter(m => m.resting).length > 0 && (
-            <Card>
-              <SectionLabel>Monthly Resting HR</SectionLabel>
-              <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>Monthly average resting heart rate</div>
-              <ResponsiveContainer width="100%" height={160}>
-                <LineChart data={hrMonthly.filter(m => m.resting)}>
+          {/* Run HR trend */}
+          {runHrDaily.length > 0 && (
+            <Card style={{ marginBottom: 14 }}>
+              <SectionLabel>Running Heart Rate Trend</SectionLabel>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>
+                Avg HR per run · higher effort = higher HR
+              </div>
+              <ResponsiveContainer width="100%" height={180}>
+                <LineChart data={runHrDaily}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#252525" />
-                  <XAxis dataKey="month" tick={{ fill: "#ccc", fontSize: 13 }} axisLine={false} tickLine={false} />
-                  <YAxis domain={[55, 85]} tick={{ fill: "#999", fontSize: 10 }} axisLine={false} tickLine={false} unit=" bpm" />
+                  <XAxis dataKey="date" tick={{ fill: "#999", fontSize: 9 }} axisLine={false} tickLine={false} />
+                  <YAxis domain={[100, 200]} tick={{ fill: "#999", fontSize: 10 }} axisLine={false} tickLine={false} unit=" bpm" />
                   <Tooltip content={<TT formatter={v => Math.round(v) + " bpm"} />} />
-                  <Line type="monotone" dataKey="resting" name="Resting HR" stroke="#f97316" strokeWidth={2.5}
-                    dot={{ fill: "#f97316", r: 5, strokeWidth: 0 }} />
+                  {hrSummary.avgRunHR && (
+                    <ReferenceLine y={hrSummary.avgRunHR} stroke="#ef4444" strokeDasharray="4 4"
+                      label={{ value: "avg " + hrSummary.avgRunHR, position: "insideTopRight", fill: "#ef4444", fontSize: 9 }} />
+                  )}
+                  <Line type="monotone" dataKey="hr" stroke="#ef4444" strokeWidth={2}
+                    dot={{ fill: "#ef4444", r: 4, strokeWidth: 0 }} activeDot={{ r: 6, fill: "#fff" }} />
                 </LineChart>
               </ResponsiveContainer>
             </Card>
           )}
+
+          {/* Monthly resting vs running HR */}
+          <Card>
+            <SectionLabel>Monthly HR — Resting vs Running</SectionLabel>
+            <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>
+              <span style={{ color: "#ef4444" }}>■</span> Avg Run HR &nbsp;·&nbsp;
+              <span style={{ color: "#f97316" }}>■</span> Resting HR
+            </div>
+            <ResponsiveContainer width="100%" height={180}>
+              <LineChart data={hrMonthly}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#252525" />
+                <XAxis dataKey="month" tick={{ fill: "#ccc", fontSize: 13 }} axisLine={false} tickLine={false} />
+                <YAxis domain={[50, 180]} tick={{ fill: "#999", fontSize: 10 }} axisLine={false} tickLine={false} unit=" bpm" />
+                <Tooltip content={<HrTT />} />
+                <Line type="monotone" dataKey="avg"     name="Avg Run HR" stroke="#ef4444" strokeWidth={2.5}
+                  dot={{ fill: "#ef4444", r: 5, strokeWidth: 0 }} connectNulls />
+                <Line type="monotone" dataKey="resting" name="Resting HR"  stroke="#f97316" strokeWidth={2.5}
+                  dot={{ fill: "#f97316", r: 5, strokeWidth: 0 }} strokeDasharray="5 3" connectNulls />
+              </LineChart>
+            </ResponsiveContainer>
+          </Card>
         </>
       )}
 
