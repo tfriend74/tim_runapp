@@ -153,20 +153,39 @@ export default async function handler(req, res) {
         wktMonthHR[m].push(r.avgHR);
       });
 
-      // Merge workout monthly HR into existing hrMonthly
+      // Merge workout avg run HR into existing weekly hrMonthly buckets
       const existingHrMonthly = existing.hrMonthly || [];
-      const hrMonthlyFromWorkouts = existingHrMonthly.map(m => ({
-        ...m,
-        avg: wktMonthHR[m.month]
-          ? Math.round(wktMonthHR[m.month].reduce((a,b)=>a+b,0)/wktMonthHR[m.month].length)
-          : m.avg,
+      // Build week->avgRunHR map from runs
+      const weekRunHR = {};
+      runs2026.filter(r => r.avgHR > 40).forEach(r => {
+        const d = new Date(r.date);
+        if (isNaN(d)) return;
+        const day = d.getDay();
+        const monday = new Date(d);
+        monday.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+        const key = monday.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        if (!weekRunHR[key]) weekRunHR[key] = [];
+        weekRunHR[key].push(r.avgHR);
+      });
+
+      // Update existing hrMonthly with avg run HR per week
+      const hrMonthlyFromWorkouts = existingHrMonthly.map(w => ({
+        ...w,
+        avg: weekRunHR[w.month]
+          ? Math.round(weekRunHR[w.month].reduce((a,b)=>a+b,0)/weekRunHR[w.month].length)
+          : w.avg,
       }));
-      // Add any new months not yet in hrMonthly
-      Object.entries(wktMonthHR).forEach(([month, hrs]) => {
-        if (!hrMonthlyFromWorkouts.find(m => m.month === month)) {
-          hrMonthlyFromWorkouts.push({ month, avg: Math.round(hrs.reduce((a,b)=>a+b,0)/hrs.length), resting: null });
+      // Add weeks that have run data but no resting HR entry yet
+      Object.entries(weekRunHR).forEach(([weekLabel, hrs]) => {
+        if (!hrMonthlyFromWorkouts.find(w => w.month === weekLabel)) {
+          hrMonthlyFromWorkouts.push({
+            month: weekLabel,
+            avg: Math.round(hrs.reduce((a,b)=>a+b,0)/hrs.length),
+            resting: null,
+          });
         }
       });
+      hrMonthlyFromWorkouts.sort((a, b) => new Date(a.month) - new Date(b.month));
 
       // Merge hrSummary — preserve resting values from metrics, update peak/avg from workouts
       const hrSummary = {
@@ -244,30 +263,39 @@ export default async function handler(req, res) {
         return { ...d, hr: matchKey ? hrByDay[matchKey] : d.hr };
       });
 
-      // Monthly HR
-      const hrMonthMap = {};
-      hrData.forEach(h => {
-        const m = (h.date || "").slice(0, 7);
-        const v = parseFloat(h.qty || 0);
-        if (m && v >= 40 && v <= 220) { if (!hrMonthMap[m]) hrMonthMap[m] = { avg: [], rest: [] }; hrMonthMap[m].avg.push(v); }
-      });
+      // Weekly resting HR averages — group restData into 7-day buckets
+      const weekBuckets = {};
       restData.forEach(h => {
-        const m = (h.date || "").slice(0, 7);
         const v = parseFloat(h.qty || 0);
-        if (m && v >= 40 && v <= 120) { if (!hrMonthMap[m]) hrMonthMap[m] = { avg: [], rest: [] }; hrMonthMap[m].rest.push(v); }
+        if (v < 40 || v > 120) return;
+        const d = new Date(h.date || "");
+        if (isNaN(d)) return;
+        // Get Monday of the week as bucket key
+        const day = d.getDay(); // 0=Sun
+        const monday = new Date(d);
+        monday.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+        const key = monday.toISOString().slice(0, 10);
+        if (!weekBuckets[key]) weekBuckets[key] = [];
+        weekBuckets[key].push(v);
       });
-      // For monthly chart: use resting HR from metrics (accurate),
-      // merge avg HR from existing workout data if available
-      const existingMonthly = existing.hrMonthly || [];
-      const hrMonthly = Object.entries(hrMonthMap).sort().map(([k, v]) => {
-        const month = new Date(k + "-01").toLocaleDateString("en-US", { month: "short" });
-        const existMonth = existingMonthly.find(m => m.month === month);
-        return {
-          month,
-          avg:     existMonth?.avg || (v.avg.length ? Math.round(v.avg.reduce((a,b)=>a+b)/v.avg.length) : null),
-          resting: v.rest.length ? Math.round(v.rest.reduce((a, b) => a + b) / v.rest.length) : null,
+
+      // Build hrMonthly as weekly resting HR averages
+      const hrMonthMap = {};
+      Object.entries(weekBuckets).sort().forEach(([weekStart, vals]) => {
+        const d     = new Date(weekStart);
+        const label = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        hrMonthMap[weekStart] = {
+          label,
+          resting: Math.round(vals.reduce((a, b) => a + b, 0) / vals.length),
+          avg:     null, // filled in from workout data below
         };
       });
+      // Convert week buckets to array for chart
+      const hrMonthly = Object.values(hrMonthMap).map(w => ({
+        month:   w.label,
+        resting: w.resting,
+        avg:     w.avg,
+      }));
 
       // Use RESTING HR for the daily chart — one clean reading per day, no duplicates
       const restingByDate = {};
