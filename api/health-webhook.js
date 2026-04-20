@@ -269,13 +269,21 @@ export default async function handler(req, res) {
         };
       });
 
-      // Only include physiologically valid HR readings for the chart
-      const hrDaily = hrData
-        .filter(h => parseFloat(h.qty || 0) >= 40)
+      // Use RESTING HR for the daily chart — one clean reading per day, no duplicates
+      const restingByDate = {};
+      restData.forEach(h => {
+        const val = parseFloat(h.qty || 0);
+        if (val < 40 || val > 120) return;
+        const day = (h.date || "").slice(0, 10);
+        if (!day) return;
+        if (!restingByDate[day] || val < restingByDate[day]) restingByDate[day] = val;
+      });
+      const hrDaily = Object.entries(restingByDate)
+        .sort(([a], [b]) => a.localeCompare(b))
         .slice(-30)
-        .map(h => ({
-          date: new Date(h.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-          hr:   Math.round(parseFloat(h.qty || 0)),
+        .map(([dateStr, val]) => ({
+          date: new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+          hr:   Math.round(val),
         }));
 
       const merged = {
